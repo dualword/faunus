@@ -4,6 +4,7 @@
 #include "auxiliary.h"
 #include "spdlog/spdlog.h"
 #include <coulombgalore.h>
+#include <algorithm>
 
 namespace Faunus {
 namespace Potential {
@@ -363,42 +364,73 @@ TEST_CASE("[Faunus] SASApotential") {
 // =============== CustomPairPotential ===============
 
 void CustomPairPotential::from_json(const json &j) {
-    Rc2 = j.value("cutoff", pc::infty);
-    Rc2 = Rc2 * Rc2;
-    jin = j;
-    auto &_j = jin["constants"];
-    if (_j == nullptr)
-        _j = json::object();
-    _j["e0"] = pc::e0;
-    _j["kB"] = pc::kB;
-    _j["kT"] = pc::kT();
-    _j["Nav"] = pc::Nav;
-    _j["Rc"] = std::sqrt(Rc2);
-    _j["T"] = pc::temperature;
-    expr.set(jin, {{"r", &d->r}, {"q1", &d->q1}, {"q2", &d->q2}, {"s1", &d->s1}, {"s2", &d->s2}});
+    cutoff_squared = std::pow(j.value("cutoff", PhysicalConstants::infty), 2);
+    initial_json_input = j;
+    auto &constants_json = initial_json_input["constants"];
+    if (constants_json.is_null()) {      // if no constants given...
+        constants_json = json::object(); // ...create empty object
+    } else if (!constants_json.is_object()) {
+        throw ConfigurationError("`constants` must be an object");
+    }
+    setDefaultConstants(constants_json);
+    expr.set(initial_json_input, {{"r", &variables.r},
+                                  {"q1", &variables.q1},
+                                  {"q2", &variables.q2},
+                                  {"s1", &variables.s1},
+                                  {"s2", &variables.s2}});
+}
+void CustomPairPotential::setDefaultConstants(json &constants_json) const {
+    constants_json["Nav"] = PhysicalConstants::Nav;
+    constants_json["inf"] = PhysicalConstants::infty;
+    constants_json["e0"] = PhysicalConstants::e0;
+    constants_json["kB"] = PhysicalConstants::kB;
+    constants_json["kT"] = PhysicalConstants::kT();
+    constants_json["pi"] = PhysicalConstants::pi;
+    constants_json["T"] = PhysicalConstants::temperature;
+    constants_json["Rc"] = std::sqrt(cutoff_squared);
 }
 
 void CustomPairPotential::to_json(json &j) const {
-    j = jin;
-    if (std::isfinite(Rc2))
-        j["cutoff"] = std::sqrt(Rc2);
+    j = initial_json_input;
+    if (std::isfinite(cutoff_squared)) {
+        j["cutoff"] = std::sqrt(cutoff_squared);
+    }
 }
-CustomPairPotential::CustomPairPotential(const std::string &name)
-    : PairPotentialBase(name), d(std::make_shared<Data>()) {}
+CustomPairPotential::CustomPairPotential(const std::string &name) : PairPotentialBase(name) {}
 
 TEST_CASE("[Faunus] CustomPairPotential") {
     using doctest::Approx;
-    json j = R"({ "atomlist" : [
-                 {"A": { "q":1.0,  "r":3, "eps":0.1 }},
-                 {"B": { "q":-1.0, "r":4, "eps":0.05 }} ]})"_json;
-    atoms = j["atomlist"].get<decltype(atoms)>();
-    Particle a, b;
-    a = atoms[0];
-    b = atoms[1];
-    CustomPairPotential pot = R"({
-                "constants": { "kappa": 30, "lB": 7},
-                "function": "lB * q1 * q2 / (s1+s2) * exp(-kappa/r) * kT + pi"})"_json;
-    CHECK(pot(a, b, 2 * 2, {0, 0, 2}) == Approx(-7 / (3.0 + 4.0) * std::exp(-30 / 2) * pc::kT() + pc::pi));
+    Faunus::atoms = R"([
+                 {"A": { "q":1.0,  "r":3.0 }},
+                 {"B": { "q":-1.0, "r":4.0 }}])"_json.get<decltype(Faunus::atoms)>();
+
+    Particle particle1, particle2;
+    particle1 = Faunus::atoms[0];
+    particle2 = Faunus::atoms[1];
+
+    SUBCASE("function") {
+        double r = 2.0_angstrom;
+        auto pot = CustomPairPotential(R"({
+                "constants": {"debye": 30, "lB": 7.0}, "cutoff": 10,
+                "function": "lB * q1 * q2 / (s1+s2) * exp(-r/debye) + r/Rc"})"_json);
+        CHECK(pot(particle1, particle2, r * r, {0, 0, r}) ==
+              Approx(-7.0 / (particle1.traits().sigma + particle2.traits().sigma) * std::exp(-r / 30.0) + r / 10.0));
+    }
+    SUBCASE("cutoff") {
+        double r = 10.1_angstrom; // beyond cutoff
+        auto pot = CustomPairPotential(R"({"cutoff": 10, "function": "1.0"})"_json);
+        CHECK(pot(particle1, particle2, r * r, {0, 0, r}) == Approx(0.0));
+    }
+    SUBCASE("constants") {
+        using namespace PhysicalConstants;
+        Point r(0, 0, 0);
+        CHECK(CustomPairPotential(R"({"function": "e0"})"_json)(particle1, particle2, 0, r) == Approx(e0));
+        CHECK(CustomPairPotential(R"({"function": "kB"})"_json)(particle1, particle2, 0, r) == Approx(kB));
+        CHECK(CustomPairPotential(R"({"function": "pi"})"_json)(particle1, particle2, 0, r) == Approx(pi));
+        CHECK(CustomPairPotential(R"({"function": "T"})"_json)(particle1, particle2, 0, r) == Approx(temperature));
+        CHECK(CustomPairPotential(R"({"function": "Nav"})"_json)(particle1, particle2, 0, r) == Approx(Nav));
+        CHECK(std::isinf(CustomPairPotential(R"({"function": "inf"})"_json)(particle1, particle2, 0, r)));
+    }
 }
 
 // =============== Dummy ===============

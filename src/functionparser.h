@@ -14,17 +14,17 @@ template <typename T> class symbol_table;
  * with a shared pointer, allowing `ExprFunction`
  * to be directly assigned to `std::function`.
  */
-template<typename T=double>
-class ExprFunction {
+template <typename T = double> class ExprFunction {
     std::shared_ptr<exprtk::parser<T>> parser;
     std::shared_ptr<exprtk::expression<T>> expression;
     std::shared_ptr<exprtk::symbol_table<T>> symbols;
-    typedef std::vector<std::pair<std::string, T*>> Tvarvec;
-    typedef std::vector<std::pair<std::string, T>> Tconstvec;
+    using VariableVector = std::vector<std::pair<std::string, T *>>;
+    using ConstantVector = std::vector<std::pair<std::string, T>>;
 
   public:
-    void set(const std::string &exprstr, const Tvarvec &vars = {}, const Tconstvec &consts = {});
-    void set(const nlohmann::json &, const Tvarvec &vars = {});
+    ExprFunction();
+    void set(const std::string &exprstr, const VariableVector &variables = {}, const ConstantVector &constants = {});
+    void set(const nlohmann::json &, const VariableVector &variables = {});
     T operator()() const;
 };
 

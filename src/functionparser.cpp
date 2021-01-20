@@ -3,32 +3,48 @@
 #include <exprtk.hpp> // https://github.com/ArashPartow/exprtk
 #include <nlohmann/json.hpp>
 
-template<typename T>
-void ExprFunction<T>::set(const std::string &exprstr, const Tvarvec &vars, const Tconstvec &consts) {
-    if (not parser) {
-        parser = std::make_shared<exprtk::parser<T>>();
-        symbols = std::make_shared<exprtk::symbol_table<T>>();
-        expression = std::make_shared<exprtk::expression<T>>();
-    }
-    symbols->clear();
-    for (auto &v : vars)
-        symbols->add_variable(v.first, *v.second);
-    for (auto &v : consts)
-        symbols->add_constant(v.first, v.second);
-    symbols->add_constants();
-    expression->register_symbol_table(*symbols);
-    if (! parser->compile(exprstr, *expression))
-        throw std::runtime_error("error passing function/expression");
+template <typename T> ExprFunction<T>::ExprFunction() {
+    parser = std::make_shared<exprtk::parser<T>>();
+    symbols = std::make_shared<exprtk::symbol_table<T>>();
+    expression = std::make_shared<exprtk::expression<T>>();
 }
 
-template<typename T>
-void ExprFunction<T>::set(const nlohmann::json &j, const Tvarvec &vars) {
-    Tconstvec consts;
-    auto it = j.find("constants");
-    if (it != j.end())
-        for (auto i = it->begin(); i != it->end(); ++i)
-            consts.push_back({i.key(), i.value()});
-    set(j.at("function"), vars, consts);
+/**
+ * @brief Set expression string, variables, and constants.
+ * @param exprstr Expression
+ * @param variables Vector of pairs of variables (name, pointer to value)
+ * @param constants Vector of pairs of constants (name, value)
+ */
+template <typename T>
+void ExprFunction<T>::set(const std::string &exprstr, const VariableVector &variables,
+                          const ConstantVector &constants) {
+    symbols->clear();
+    for (auto [name, value_ptr] : variables) {
+        symbols->add_variable(name, *value_ptr);
+    }
+    for (auto [name, value] : constants) {
+        symbols->add_constant(name, value);
+    }
+    symbols->add_constants();
+    expression->register_symbol_table(*symbols);
+    if (!parser->compile(exprstr, *expression)) {
+        throw std::runtime_error("error parsing function/expression");
+    }
+}
+
+template <typename T> void ExprFunction<T>::set(const nlohmann::json &j, const VariableVector &variables) {
+    ConstantVector constants; // temporary storage for user-defined constants
+    if (auto it = j.find("constants"); it != j.end()) {
+        if (it->is_object()) {
+            constants.reserve(it->size());
+            for (auto [name, value] : it->items()) {
+                constants.push_back({name, value});
+            }
+        } else {
+            throw std::runtime_error("`constants` must be an object");
+        }
+    }
+    set(j.at("function").get<std::string>(), variables, constants);
 }
 
 template<typename T>

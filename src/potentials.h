@@ -9,6 +9,7 @@
 #include <coulombgalore.h>
 #include <array>
 #include <functional>
+#include <algorithm>
 
 /*
 namespace CoulombGalore {
@@ -65,7 +66,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(CombinationRuleType, {
  * @brief Exception for handling pair potential initialization.
  */
 struct PairPotentialException : public std::runtime_error {
-    PairPotentialException(const std::string msg) : std::runtime_error(msg){};
+    explicit PairPotentialException(const std::string msg) : std::runtime_error(msg){};
 };
 
 /**
@@ -601,31 +602,38 @@ class Multipole : public NewCoulombGalore {
 };
 
 /**
- * @brief Custom pair-potential taking math. expressions at runtime
+ * @brief Custom pair-potential taking mathematical expressions at runtime
  */
 class CustomPairPotential : public PairPotentialBase {
   private:
     // Only ExprFunction<double> is explicitly instantiated in functionparser.cpp. Other types as well as
     // the implicit template instantiation is disabled to save reasources during the compilation/build.
     ExprFunction<double> expr;
-    struct Data {
-        double r = 0, q1 = 0, q2 = 0, s1 = 0, s2 = 0;
+    struct VariableData {
+        double r = 0.0;  // inter-particle distance
+        double q1 = 0.0; // charge of particle 1
+        double q2 = 0.0; // charge of particle 2
+        double s1 = 0.0; // sigma of particle 1
+        double s2 = 0.0; // sigma of particle 2
     };
-    double Rc2;
-    std::shared_ptr<Data> d;
-    json jin; // initial json input
+    double cutoff_squared = PhysicalConstants::infty;
+    mutable VariableData variables; // mutable since operator() is marked `const`
+    json initial_json_input;        // initial json input
+    void setDefaultConstants(json &constants_json) const;
+
   public:
     inline double operator()(const Particle &a, const Particle &b, double r2, const Point &) const override {
-        if (r2 > Rc2)
-            return 0;
-        d->r = sqrt(r2);
-        d->q1 = a.charge;
-        d->q2 = b.charge;
-        d->s1 = atoms[a.id].sigma;
-        d->s2 = atoms[b.id].sigma;
+        if (r2 > cutoff_squared) {
+            return 0.0;
+        }
+        variables.r = std::sqrt(r2);
+        variables.q1 = a.charge;
+        variables.q2 = b.charge;
+        variables.s1 = Faunus::atoms[a.id].sigma;
+        variables.s2 = Faunus::atoms[b.id].sigma;
         return expr();
     }
-    CustomPairPotential(const std::string & = "custom");
+    CustomPairPotential(const std::string &name = "custom");
 
     void from_json(const json &) override;
     void to_json(json &) const override;
